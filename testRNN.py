@@ -121,9 +121,7 @@ def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, ou
                     print('          :      ' + vocab_decode(a[3]))
 
                     #print('mse: ' + str(mse))
-                    print('Sample:')
                     online_inference(sess, vocab, X, sample, temp, in_state, out_state)
-                    print('')
 
                 iteration += 1
 
@@ -140,7 +138,10 @@ def online_inference(sess, vocab, seq, sample, temp, in_state, out_state, seed='
             feed.update({in_state: state})
         index, state = sess.run([sample, out_state], feed)
         sentence += vocab_decode(index, vocab)
+    print('Sample')
     print(sentence)
+    print('')
+
 
 def main():
     X = tf.placeholder(tf.int32, [None, NUM_STEPS])
