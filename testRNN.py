@@ -10,7 +10,7 @@ vocab = (
         "\\^_abcdefghijklmnopqrstuvwxyz{|}")
 
 DATA_PATH = 'input.txt'
-HIDDEN_SIZE = 1000
+HIDDEN_SIZE = 200
 BATCH_SIZE = 64
 SKIP_STEP = 5
 NUM_STEPS = 50
@@ -29,7 +29,7 @@ def vocab_encode(text):
 def vocab_decode(array):
     return ''.join([vocab[x - 1] for x in array])
 
-def read_data(filename, window=NUM_STEPS, overlap=NUM_STEPS//2):
+def read_data(filename, window=NUM_STEPS, overlap=NUM_STEPS // 2):
     for text in open(filename):
         text = vocab_encode(text)
         for start in range(0, len(text) - window, overlap):
@@ -59,27 +59,25 @@ def create_rnn(batch):
     return rnn_output, in_state, out_state
 
 
-def create_model(batch, temp):
+def create_model(batch, temp, num_steps):
     with tf.device("/cpu:0"):
         batch = tf.one_hot(batch, len(vocab))
         
         rnn_output, in_state, out_state = create_rnn(batch)
-        
         stacked_rnn_output = tf.reshape(rnn_output, [-1, HIDDEN_SIZE])
         stacked_output = tf.contrib.layers.fully_connected(stacked_rnn_output,
                                                             NUM_OUTPUT, activation_fn=None)
-        
-        logits = tf.reshape(stacked_output, [-1, NUM_STEPS, NUM_OUTPUT])
+
+        logits = tf.reshape(stacked_output, [-1, num_steps, NUM_OUTPUT])
         loss = tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(logits=logits[:, :-1], labels=batch[:, 1:]))
 
         # sample the next character from Maxwell-Boltzmann Distribution with temperature temp
-        # it works equally well without tf.exp
         sample = tf.multinomial(tf.exp(logits[:, -1] / temp), 1)[:, 0] 
 
     return loss, logits, in_state, out_state, sample
 
 
-def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, out_state):
+def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, out_state, num_steps):
     saver = tf.train.Saver()
     start = time.time()
 
@@ -120,39 +118,43 @@ def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, ou
                     print('          :      ' + vocab_decode(a[2]))
                     print('          :      ' + vocab_decode(a[3]))
 
-                    #print('mse: ' + str(mse))
-                    online_inference(sess, vocab, X, sample, temp, in_state, out_state)
+                    generateSample(sess, X, sample, temp, in_state, out_state, num_steps)
 
                 iteration += 1
 
-def online_inference(sess, vocab, seq, sample, temp, in_state, out_state, seed='T'):
-    """ Generate sequence one character at a time, based on the previous character
-    """
+def getSampleHiddenState(sess, seed, X, out_state):
+    seed = [vocab_encode(seed[:-1])]
+    state = sess.run(out_state, feed_dict = {X : seed})
+    return state
+
+def generateSample(sess, X, sample, temp, in_state, out_state, num_steps, seed='T'):
     sentence = seed
     state = None
+    if (len(seed) > 1): state = getSampleHiddenState(sess, seed, X, out_state)
+
     for _ in range(LEN_GENERATED):
         batch = [vocab_encode(sentence[-1])]
-        feed = {seq: batch, temp: TEMPERATURE}
+        feed = {X: batch, temp: TEMPERATURE, num_steps: 1}
         # for the first decoder step, the state is None
         if state is not None:
             feed.update({in_state: state})
         index, state = sess.run([sample, out_state], feed)
-        sentence += vocab_decode(index, vocab)
+        sentence += vocab_decode(index)
     print('Sample')
     print(sentence)
     print('')
 
 
 def main():
-    X = tf.placeholder(tf.int32, [None, NUM_STEPS])
+    X = tf.placeholder(tf.int32, [None, None])
     temp = tf.placeholder(tf.float32)
+    num_steps = tf.placeholder_with_default(NUM_STEPS, None)
     global_step = tf.Variable(0, dtype=tf.int32, trainable=False, name='global_step')
 
-    loss, logits, in_state, out_state, sample = create_model(X, temp)
+    loss, logits, in_state, out_state, sample = create_model(X, temp, num_steps)
     optimizer = tf.train.AdamOptimizer(LR).minimize(loss, global_step=global_step)
 
-    training(X, loss, optimizer, global_step, logits, sample, temp, in_state, out_state)
-
+    training(X, loss, optimizer, global_step, logits, sample, temp, in_state, out_state, num_steps)
 
 
 if __name__ == '__main__':
