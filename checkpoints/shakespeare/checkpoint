@@ -1,6 +1,0 @@
-model_checkpoint_path: "char-rnn-5189"
-all_model_checkpoint_paths: "char-rnn-5169"
-all_model_checkpoint_paths: "char-rnn-5174"
-all_model_checkpoint_paths: "char-rnn-5179"
-all_model_checkpoint_paths: "char-rnn-5184"
-all_model_checkpoint_paths: "char-rnn-5189"

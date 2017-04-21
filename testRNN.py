@@ -17,7 +17,7 @@ NUM_STEPS = 50
 NUM_OUTPUT = len(vocab)
 NUM_LAYERS = 2
 EPOCHS = 100
-TEMPERATURE = 0.7
+TEMPERATURE = .95
 LEN_GENERATED = 300
 LR = 0.003
 
@@ -49,21 +49,26 @@ def read_batch(stream, batch_size=BATCH_SIZE):
 def create_rnn(batch):
     cell = tf.contrib.rnn.GRUCell(num_units=HIDDEN_SIZE, activation = tf.nn.relu)
 
-    in_state = tf.placeholder_with_default(
+    in_state_1 = tf.placeholder_with_default(
             cell.zero_state(tf.shape(batch)[0], tf.float32), [None, HIDDEN_SIZE])
 
-    #dropout_cell = tf.contrib.rnn.DropoutWrapper(cell, input_keep_prob=keep_prob)
-    #multi_layer_cell = tf.contrib.rnn.MultiRNNCell([cell] * NUM_LAYERS)
-    rnn_output, out_state = tf.nn.dynamic_rnn(cell, batch, initial_state=in_state, dtype=tf.float32)
+    in_state_2 = tf.placeholder_with_default(
+            cell.zero_state(tf.shape(batch)[0], tf.float32), [None, HIDDEN_SIZE])
 
-    return rnn_output, in_state, out_state
+    in_states = (in_state_1, in_state_2)
+
+    #dropout_cell = tf.contrib.rnn.DropoutWrapper(cell, input_keep_prob=keep_prob)
+    multi_layer_cell = tf.contrib.rnn.MultiRNNCell([cell] * NUM_LAYERS)
+    rnn_output, out_states = tf.nn.dynamic_rnn(multi_layer_cell, batch, initial_state=in_states, dtype=tf.float32)
+
+    return rnn_output, in_states, out_states
 
 
 def create_model(batch, temp, num_steps):
     with tf.device("/cpu:0"):
         batch = tf.one_hot(batch, len(vocab))
         
-        rnn_output, in_state, out_state = create_rnn(batch)
+        rnn_output, in_states, out_states = create_rnn(batch)
         stacked_rnn_output = tf.reshape(rnn_output, [-1, HIDDEN_SIZE])
         stacked_output = tf.contrib.layers.fully_connected(stacked_rnn_output,
                                                             NUM_OUTPUT, activation_fn=None)
@@ -74,10 +79,10 @@ def create_model(batch, temp, num_steps):
         # sample the next character from Maxwell-Boltzmann Distribution with temperature temp
         sample = tf.multinomial(tf.exp(logits[:, -1] / temp), 1)[:, 0] 
 
-    return loss, logits, in_state, out_state, sample
+    return loss, logits, in_states, out_states, sample
 
 
-def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, out_state, num_steps):
+def training(X, loss, optimizer, global_step, logits, sample, temp, in_states, out_states, num_steps):
     saver = tf.train.Saver()
     start = time.time()
 
@@ -86,10 +91,10 @@ def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, ou
 
 
     with tf.Session() as sess:
-        writer = tf.summary.FileWriter('graphs/shakespeare', sess.graph)
+        writer = tf.summary.FileWriter('graphs/shakespeare-1', sess.graph)
         sess.run(tf.global_variables_initializer())
 
-        ckpt = tf.train.get_checkpoint_state(os.path.dirname('checkpoints/shakespeare/checkpoint'))
+        ckpt = tf.train.get_checkpoint_state(os.path.dirname('checkpoints/shakespeare-1/checkpoint'))
         if ckpt and ckpt.model_checkpoint_path:
             saver.restore(sess, ckpt.model_checkpoint_path)
         for i in range(EPOCHS):
@@ -103,7 +108,7 @@ def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, ou
                     print('Iter {}. \n    Loss {}. Time {}'.format(iteration, batch_loss, time.time() - start))
 
                     start = time.time()
-                    saver.save(sess, 'checkpoints/shakespeare/char-rnn', iteration)
+                    saver.save(sess, 'checkpoints/shakespeare-1/char-rnn', iteration)
 
                     a, b= sess.run([logits[:,:-1], char2vec[:, 1:]], feed_dict={X: batch})
                     
@@ -118,27 +123,28 @@ def training(X, loss, optimizer, global_step, logits, sample, temp, in_state, ou
                     print('          :      ' + vocab_decode(a[2]))
                     print('          :      ' + vocab_decode(a[3]))
 
-                    generateSample(sess, X, sample, temp, in_state, out_state, num_steps)
+                    generateSample(sess, X, sample, temp, in_states, out_states, num_steps)
 
                 iteration += 1
 
-def getSampleHiddenState(sess, seed, X, out_state):
+def getSampleHiddenState(sess, seed, X, out_states):
     seed = [vocab_encode(seed[:-1])]
-    state = sess.run(out_state, feed_dict = {X : seed})
+    state = sess.run(out_states, feed_dict = {X : seed})
     return state
 
-def generateSample(sess, X, sample, temp, in_state, out_state, num_steps, seed='T'):
+def generateSample(sess, X, sample, temp, in_states, out_states, num_steps, seed='Truth'):
     sentence = seed
     state = None
-    if (len(seed) > 1): state = getSampleHiddenState(sess, seed, X, out_state)
+
+    if (len(seed) > 1): state = getSampleHiddenState(sess, seed, X, out_states)
 
     for _ in range(LEN_GENERATED):
         batch = [vocab_encode(sentence[-1])]
         feed = {X: batch, temp: TEMPERATURE, num_steps: 1}
         # for the first decoder step, the state is None
         if state is not None:
-            feed.update({in_state: state})
-        index, state = sess.run([sample, out_state], feed)
+            feed.update({in_states: state})
+        index, state = sess.run([sample, out_states], feed)
         sentence += vocab_decode(index)
     print('Sample')
     print(sentence)
@@ -151,10 +157,10 @@ def main():
     num_steps = tf.placeholder_with_default(NUM_STEPS, None)
     global_step = tf.Variable(0, dtype=tf.int32, trainable=False, name='global_step')
 
-    loss, logits, in_state, out_state, sample = create_model(X, temp, num_steps)
+    loss, logits, in_states, out_states, sample = create_model(X, temp, num_steps)
     optimizer = tf.train.AdamOptimizer(LR).minimize(loss, global_step=global_step)
 
-    training(X, loss, optimizer, global_step, logits, sample, temp, in_state, out_state, num_steps)
+    training(X, loss, optimizer, global_step, logits, sample, temp, in_states, out_states, num_steps)
 
 
 if __name__ == '__main__':
